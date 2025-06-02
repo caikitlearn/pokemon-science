@@ -171,7 +171,7 @@ def fetch_replays(
     Returns:
         None: The replay data is written to the specified CSV file.
     """
-    filename = f"{format_name}_replay_ids.csv"
+    filename = f"{format_name}_replays.csv"
     replays = []
     tot = 0
 
@@ -197,7 +197,7 @@ def fetch_replays(
 
                 if not data:
                     print(f"Fetched empty batch. Stopping.")
-                    print(f"{tot} replay IDs fetched from {start_date} to {end_date}.")
+                    print(f"{tot} replays fetched from {start_date} to {end_date}.")
                     return None
 
                 success = True
@@ -209,7 +209,7 @@ def fetch_replays(
 
         if not success:
             print(f"Skipping after {max_retries} failed attempts.")
-            print(f"{tot} replay IDs fetched from {start_date} to {end_date}.")
+            print(f"{tot} replays fetched from {start_date} to {end_date}.")
             return None
 
         temp = min(data, key=lambda x: x['uploadtime'])['uploadtime']
@@ -223,7 +223,7 @@ def fetch_replays(
             d.update(parsed_data)
 
         print(
-            f"Fetched {len(data)} replay IDs before "
+            f"Fetched {len(data)} replays before "
             f"{datetime.fromtimestamp(before, tz=timezone.utc).strftime('%F')}."
         )
 
@@ -235,7 +235,7 @@ def fetch_replays(
         before = temp
         time.sleep(delay)
 
-    print(f"{tot} replay IDs fetched from {start_date} to {end_date}.")
+    print(f"{tot} replays fetched from {start_date} to {end_date}.")
 
 
 def main():
@@ -251,7 +251,7 @@ def main():
     default_end_date = today_utc.strftime("%Y-%m-%d")
     default_start_date = (today_utc - timedelta(days=7)).strftime("%Y-%m-%d")
 
-    parser = argparse.ArgumentParser(description="Fetch Pokémon Showdown replay IDs.")
+    parser = argparse.ArgumentParser(description="Fetch Pokémon Showdown replays.")
     parser.add_argument(
         "format_name",
         type=str,
