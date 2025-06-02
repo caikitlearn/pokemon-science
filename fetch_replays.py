@@ -37,7 +37,7 @@ def parse_replay_log(
     Returns:
         pd.DataFrame: A single row containing the extracted data.
     """
-    api_url: str = 'https://replay.pokemonshowdown.com/{}.json'
+    # print(f"PARSING REPLAY https://replay.pokemonshowdown.com/{replay_id}")
     try:
         api_url = f"https://replay.pokemonshowdown.com/{replay_id}.json"
         resp = requests.get(api_url)
@@ -115,9 +115,10 @@ def parse_replay_log(
                     
         # parsing the moves of the pokemon
         if tag == 'move':
-            player_pkmn, move = parts[2], parts[3]
-            player, pkmn = player_pkmn.split(':')
-            pkmn = pkmn.strip()
+            p_data, move = parts[2], parts[3]
+            p_data = p_data.split(':')
+            player = p_data[0]
+            pkmn = ':'.join(p_data[1:]).strip()
             if player == 'p1a':
                 p1_team[p1_nick[pkmn]].add(move)
             elif player == 'p2a':
