@@ -25,6 +25,39 @@ def utc_timestamp(date_str: str) -> int:
         datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
     )
 
+
+def get_with_retries(
+    url: str,
+    params: dict | None = None,
+    max_retries: int = 3,
+    timeout: int = 10,
+    delay: float = 1.0,
+) -> requests.Response | None:
+    """
+    Attempts to make an HTTP GET request with retries.
+    
+    Args:
+        url (str): The URL to make the request to.
+        params (dict | None): Dictionary of URL parameters. Defaults to None.
+        max_retries (int): Number of retry attempts for failed requests.
+        timeout (int): Request timeout in seconds.
+        delay (float): Base delay in seconds between attempts.
+        
+    Returns:
+        requests.Response or None: The response object if successful, None otherwise.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except Exception as e:
+            print(f"Attempt {attempt} failed for URL {url}: {e}")
+            if attempt < max_retries:
+                time.sleep(min(2**attempt, delay * 5))
+    return None
+
+
 def parse_replay_log(
     replay_id: str,
 ) -> pd.DataFrame:
@@ -38,23 +71,29 @@ def parse_replay_log(
         pd.DataFrame: A single row containing the extracted data.
     """
     # print(f"PARSING REPLAY https://replay.pokemonshowdown.com/{replay_id}")
-    try:
-        api_url = f"https://replay.pokemonshowdown.com/{replay_id}.json"
-        resp = requests.get(api_url)
-        data = resp.json()
-    except Exception as e:
-        print(f"Failed to parse replay {replay_id}: {e}")
+    api_url = f"https://replay.pokemonshowdown.com/{replay_id}.json"
+    resp = get_with_retries(api_url)
+    
+    if not resp:
+        print(f"Failed to fetch replay {replay_id} after multiple retries.")
         return {}
 
-    p1_team = {}
-    p2_team = {}
+    try:
+        data = resp.json()
+    except Exception as e:
+        print(f"Failed to parse JSON for replay {replay_id}: {e}")
+        return {}
+
     p1_name = None
     p2_name = None
     p1_elo = None
     p2_elo = None
-    winner = None
     p1_lead = None
     p2_lead = None
+    p1_team = {}
+    p2_team = {}
+    winner = None
+    
     p1_nick = {}
     p2_nick = {}
     seen_p1_lead = False
@@ -149,7 +188,7 @@ def fetch_replays(
     api_url: str = "https://replay.pokemonshowdown.com/search.json",
     max_retries: int = 3,
     timeout: int = 10,
-    delay: float = 1,
+    delay: float = 1.0,
 ) -> None:
     """
     Fetches Pokémon Showdown replay metadata for a specified format between two dates
@@ -167,7 +206,7 @@ def fetch_replays(
         api_url (str): URL of the Pokémon Showdown replay search API.
         max_retries (int): Number of retry attempts for failed requests.
         timeout (int): Request timeout in seconds.
-        delay (float): Delay in seconds between successful fetches.
+        delay (float): Base delay in seconds between attempts.
 
     Returns:
         None: The replay data is written to the specified CSV file.
@@ -189,27 +228,22 @@ def fetch_replays(
             "format": format_name,
             "before": before,
         }
-        success = False
-        for attempt in range(1, max_retries + 1):
-            try:
-                resp = requests.get(api_url, params=params, timeout=timeout)
-                resp.raise_for_status()
-                data = resp.json()
-
-                if not data:
-                    print(f"Fetched empty batch. Stopping.")
-                    print(f"{tot} replays fetched from {start_date} to {end_date}.")
-                    return None
-
-                success = True
-                break
-
-            except Exception as e:
-                print(f"Attempt {attempt} failed: {e}")
-                time.sleep(min(2**attempt, 5))
-
-        if not success:
+        resp = get_with_retries(api_url, params=params, timeout=timeout, max_retries=max_retries, delay=delay)
+        
+        if not resp:
             print(f"Skipping after {max_retries} failed attempts.")
+            print(f"{tot} replays fetched from {start_date} to {end_date}.")
+            return None
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            print(f"Failed to parse JSON for search API with params {params}: {e}")
+            print(f"{tot} replays fetched from {start_date} to {end_date}.")
+            return None
+
+        if not data:
+            print(f"Fetched empty batch. Stopping.")
             print(f"{tot} replays fetched from {start_date} to {end_date}.")
             return None
 
