@@ -1,0 +1,17 @@
+name: pokemon-science
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - ipykernel
+  - jupyter
+  - jupyterlab
+  - matplotlib
+  - numpy
+  - pandas
+  - pytorch
+  - pytorch-cuda=12.1
+  - scikit-learn

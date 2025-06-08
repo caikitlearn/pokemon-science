@@ -58,6 +58,22 @@ def get_with_retries(
     return None
 
 
+def parse_log_header(header: str) -> tuple[str, str]:
+    """Parses a log header string to extract the Player ID and Pokemon nickname.
+
+    Args:
+        header: The log header string, such as "p1a: Tyranocif".
+
+    Returns:
+        A tuple containing the player ID and Pokemon nickname.
+    """
+    player_data = header.split(':')
+    # some headers look like [of] player_id: nickname
+    player_id = player_data[0].split()[-1]
+    nickname = ':'.join(player_data[1:]).strip()
+    return player_id[:2], nickname
+
+    
 def parse_replay_log(
     replay_id: str,
 ) -> pd.DataFrame:
@@ -84,20 +100,34 @@ def parse_replay_log(
         print(f"Failed to parse JSON for replay {replay_id}: {e}")
         return {}
 
-    p1_name = None
-    p2_name = None
-    p1_elo = None
-    p2_elo = None
-    p1_lead = None
-    p2_lead = None
-    p1_team = {}
-    p2_team = {}
+    player_stats = defaultdict(
+        lambda: {
+            'name': None,
+            'elo': None,
+            'team_order': [],
+            'team_size': None,
+            'spikes': None,
+        }
+    )
+    pokemon_stats = defaultdict(
+        lambda: defaultdict(
+            lambda: {
+                'species': None,
+                'moves': defaultdict(int),
+                'damage_dealt': 0,
+                'damage_received': 0,
+                'status_dealt': 0,
+                'status_received': 0,
+                'n_ko_dealt': 0,
+                'n_ko_received': 0,
+                'turns_on_field': 0,
+            }
+        )
+    )
+
+    active_pokemon = {}
+    n_turns = 0
     winner = None
-    
-    p1_nick = {}
-    p2_nick = {}
-    seen_p1_lead = False
-    seen_p2_lead = False
 
     for line in data.get('log', '').split('\n'):
         parts = line.strip().split('|')    
@@ -106,66 +136,93 @@ def parse_replay_log(
             continue
         
         tag = parts[1]
+        
         # parse for player name and elo
         if tag == 'player':
-            if parts[2] == 'p1' and not p1_name and not p1_elo:
-                p1_name = parts[3]
+            print(line)
+            player_id = parts[2]
+            if not player_stats[player_id]['name']:
+                name = parts[3]
+                player_stats[player_id]['name'] = name
+            if not player_stats[player_id]['elo']:
+                # sometimes ELO is null
                 try:
-                    p1_elo = int(parts[5])
+                    elo = int(parts[5])
+                    player_stats[player_id]['elo'] = elo
                 except ValueError:
                     pass
-            elif parts[2] == 'p2' and not p2_name and not p2_elo:
-                p2_name = parts[3]
-                try:
-                    p2_elo = int(parts[5])
-                except ValueError:
-                    pass
+        elif tag == 'teamsize':
+            player_id = parts[2]
+            player_stats[player_id]['team_size'] = int(parts[3])
+        elif tag == 'switch' or tag == 'drag':
+            player_id, nickname = parse_log_header(parts[2])
+            species = parts[3].split(',')[0]
+            hp = int(parts[4].split('/')[0])
 
-        # parse for team size
-        if tag == 'teamsize':
-            if parts[2] == 'p1':
-                p1_teamsize = int(parts[3])
-            elif parts[2] == 'p2':
-                p2_teamsize = int(parts[3])
+            pokemon_stats[player_id][nickname]['species'] = species
 
-        # parsing the pokemon on the team
-        if tag in {'switch', 'drag'}:
-            p_data, pkmn = parts[2], parts[3]
-            pkmn = pkmn.split(',')[0]
-            p_data = p_data.split(':')
-            player = p_data[0]
-            nick = ':'.join(p_data[1:]).strip()
-            if player == 'p1a':
-                if not seen_p1_lead:
-                    p1_lead = pkmn
-                    seen_p1_lead = True
-                if pkmn not in p1_team:
-                    p1_team[pkmn] = set()
-                if nick not in p1_nick:
-                    p1_nick[nick] = pkmn
-            elif player == 'p2a':
-                if not seen_p2_lead:
-                    p2_lead = pkmn
-                    seen_p2_lead = True
-                if pkmn not in p2_team:
-                    p2_team[pkmn] = set()
-                if nick not in p2_nick:
-                    p2_nick[nick] = pkmn
-                    
-        # parsing the moves of the pokemon
-        if tag == 'move':
-            p_data, move = parts[2], parts[3]
-            p_data = p_data.split(':')
-            player = p_data[0]
-            pkmn = ':'.join(p_data[1:]).strip()
-            if player == 'p1a':
-                p1_team[p1_nick[pkmn]].add(move)
-            elif player == 'p2a':
-                p2_team[p2_nick[pkmn]].add(move)
+            if species not in player_stats[player_id]['team_order']:
+                player_stats[player_id]['team_order'].append(species)
 
-        # parsing the winner
-        if tag == 'win':
+            active_pokemon[player_id] = {'nickname': nickname, 'hp': hp}
+        elif tag == 'turn':
+            n_turns += 1
+            for player_id in active_pokemon:
+                pokemon_stats[player_id][active_pokemon[player_id]['nickname']]['turns_on_field'] += 1
+        elif tag == 'win':
             winner = parts[2]
+            for player_id in active_pokemon:
+                pokemon_stats[player_id][active_pokemon[player_id]['nickname']]['turns_on_field'] += 1
+        elif tag == 'move':
+            player_id, nickname = parse_log_header(parts[2])
+            pokemon_move = parts[3]
+            pokemon_stats[player_id][nickname]['moves'][pokemon_move] += 1
+        elif tag == '-status':
+            if len(parts) == 4:
+                player_id, nickname = parse_log_header(parts[2])
+                attacker_player_id = 'p1' if player_id == 'p2' else 'p2'
+                attacker_nickname = active_pokemon[attacker_player_id]['nickname']
+                status = parts[3]
+                pokemon_stats[attacker_player_id][attacker_nickname]['status_dealt'] += 1
+                pokemon_stats[player_id][nickname]['status_received'] += 1
+        elif tag == '-damage':
+            player_id, nickname = parse_log_header(parts[2])
+            attacker_player_id = 'p1' if player_id == 'p2' else 'p2'
+            attacker_nickname = active_pokemon[attacker_player_id]['nickname']
+            old_hp = active_pokemon[player_id]['hp']
+            # direct damage
+            if len(parts) == 4:
+                if 'fnt' in parts[3]:
+                    pokemon_stats[attacker_player_id][attacker_nickname]['n_ko_dealt'] += 1
+                    new_hp = int(parts[3].split()[0])
+                if '/' in parts[3]:
+                    new_hp = int(parts[3].split('/')[0])
+                # assign direct damage dealt
+                pokemon_stats[attacker_player_id][attacker_nickname]['damage_dealt'] += old_hp - new_hp
+                # assign direct damage received
+                pokemon_stats[player_id][nickname]['damage_received'] += old_hp - new_hp
+            # indirect damage has a 5th section
+            if len(parts) == 5:
+                new_hp = int(parts[3].split('/')[0])
+            active_pokemon[player_id] = {'nickname': nickname, 'hp': new_hp}
+        elif tag == '-heal':
+            player_id, nickname = parse_log_header(parts[2])
+            new_hp = int(parts[3].split('/')[0])
+            active_pokemon[player_id] = {'nickname': nickname, 'hp': new_hp}
+        elif tag == 'faint':
+            player_id, nickname = parse_log_header(parts[2])
+            pokemon_stats[player_id][nickname]['n_ko_received'] += 1
+        elif tag == '-sidestart':
+            # print(parts)
+            player_id, nickname = parse_log_header(parts[2])
+            attacker_player_id = 'p1' if player_id == 'p2' else 'p2'
+            attacker_nickname = active_pokemon[attacker_player_id]['nickname']
+            # print(attacker_nickname)
+        elif tag == '-sideend':
+            player_id, nickname = parse_log_header(parts[5])
+            # print(player_id, nickname)
+        elif tag == 'weather':
+            pass
 
     row = {
         "p1_name": p1_name,
